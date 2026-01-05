@@ -1,3 +1,15 @@
+import http.server
+import socketserver
+import threading
+
+# Створюємо фейковий веб-сервер для Render
+def run_dummy_server():
+    handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", 10000), handler) as httpd:
+        httpd.serve_forever()
+
+# Запускаємо його в окремому потоці
+threading.Thread(target=run_dummy_server, daemon=True).start()
 import os
 import asyncio
 import logging
