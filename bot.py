@@ -27,11 +27,10 @@ class Form(StatesGroup):
     photo = State()
 
 class ReportState(StatesGroup):
-    reported_user_id = State()
-    choosing_reason = State()
+    current_reason = State()
     waiting_for_details = State()
 
-# --- ГОЛОВНЕ МЕНЮ ---
+# --- КНОПКИ МЕНЮ ---
 def main_menu():
     kb = [
         [KeyboardButton(text="🔍 Дивитись анкети"), KeyboardButton(text="❤️ Мене лайкнули")],
@@ -45,9 +44,9 @@ def main_menu():
 async def cmd_start(message: Message, state: FSMContext):
     welcome_text = (
         "Вітаємо у **Нетіндер** 🖤\n\n"
-        "Тут ми цінуємо твій час та безпеку. Будь ласка, поважай своїх співрозмовників — це база нашого ком'юніті.\n\n"
+        "Тут ми цінуємо твій час та комфорт. Будь ласка, поважай своїх співрозмовників — це основа нашої спільноти.\n\n"
         "🛡 **Про твій номер телефону:**\n"
-        "— Він потрібен лише для того, щоб підтвердити, що ти — реальна людина.\n"
+        "— Він потрібен виключно для захисту від фейків та дублікатів.\n"
         "— **Ми нікому не передаємо твій номер.**\n"
         "— **Ми ніколи не будемо тобі дзвонити.**\n\n"
         "🎁 Твій перший тиждень після реєстрації — **Premium безкоштовно!**"
@@ -65,7 +64,7 @@ async def cmd_start(message: Message, state: FSMContext):
 @dp.message(Form.phone, F.contact)
 async def process_phone(message: Message, state: FSMContext):
     await state.update_data(phone=message.contact.phone_number)
-    await message.answer("Дякуємо! Тепер скажи, як тебе звати?", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Дякуємо за довіру! Тепер скажи, як тебе звати?", reply_markup=ReplyKeyboardRemove())
     await state.set_state(Form.name)
 
 @dp.message(Form.name)
@@ -97,55 +96,53 @@ async def process_age(message: Message, state: FSMContext):
 @dp.message(Form.city)
 async def process_city(message: Message, state: FSMContext):
     await state.update_data(city=message.text)
-    await message.answer("Надішли своє фото. Тільки реальні фото, будь ласка.")
+    await message.answer("Надішли своє фото. Використовуй реальні знімки — так шанси знайти цікаву людину значно вищі.")
     await state.set_state(Form.photo)
 
 @dp.message(Form.photo, F.photo)
 async def process_photo(message: Message, state: FSMContext):
-    user_data = await state.get_data()
-    
-    # Сповіщення в адмін-групу
-    admin_msg = (
+    data = await state.get_data()
+    # Надсилаємо анкету в адмін-групу
+    admin_info = (
         f"🆕 **Новий користувач!**\n"
-        f"👤 {user_data['name']}, {user_data['age']}р., {user_data['city']}\n"
-        f"📱 Номер: {user_data['phone']}\n"
+        f"👤 {data['name']}, {data['age']}р., {data['city']}\n"
+        f"📱 Номер: {data['phone']}\n"
         f"🆔 ID: `{message.from_user.id}`"
     )
-    await bot.send_message(chat_id=ADMIN_GROUP_ID, text=admin_msg)
+    await bot.send_photo(chat_id=ADMIN_GROUP_ID, photo=message.photo[-1].file_id, caption=admin_info)
     
-    await message.answer("Анкета створена! Тепер ти можеш дивитись інші анкети. 😉", reply_markup=main_menu())
+    await message.answer("Анкета створена! Бажаємо приємного спілкування. 😉", reply_markup=main_menu())
     await state.clear()
 
-# --- СТАТИСТИКА (ДЛЯ ГРУПИ) ---
+# --- СТАТИСТИКА ТА АДМІНКА ---
 @dp.message(Command("stats"), F.chat.id == ADMIN_GROUP_ID)
 async def cmd_stats(message: Message):
-    await message.answer("📊 **Статистика «Нетіндер»**\n\n👥 Користувачів у базі: 1\n💎 Premium: 1\n📈 Сьогодні: +1")
+    await message.answer("📊 **Статистика «Нетіндер»**\n\n👥 Зареєстровано: 1\n🆕 Сьогодні: +1\n💎 Premium юзери: 1")
 
-# --- СКАРГИ (ГЕТЬ) ---
+@dp.message(F.text == "🆘 Зв'язок з адміном")
+async def contact_admin(message: Message):
+    await message.answer("Напиши своє запитання наступним повідомленням. Адміністрація отримає його і відповість найближчим часом.")
+
+# --- ЛОГІКА СКАРГ (ВИКЛИК ЧЕРЕЗ КНОПКУ ПІД АНКЕТОЮ) ---
 @dp.callback_query(F.data.startswith("reason_"))
-async def report_step_2(callback: types.CallbackQuery, state: FSMContext):
+async def report_description(callback: types.CallbackQuery, state: FSMContext):
     reason = callback.data.split("_")[1]
     await state.update_data(current_reason=reason)
-    await callback.message.answer("Опиши коротко, що сталося? (Або надішли '-')")
+    await callback.message.answer("Будь ласка, опиши детальніше, що саме не так? (Якщо не хочеш писати, просто надішли '-')")
     await state.set_state(ReportState.waiting_for_details)
 
 @dp.message(ReportState.waiting_for_details)
-async def report_step_3(message: Message, state: FSMContext):
+async def report_to_group(message: Message, state: FSMContext):
     data = await state.get_data()
-    report_card = (
-        f"🚨 **СКАРГА**\n"
+    report_msg = (
+        f"🚨 **СКАРГА ВІД КОРИСТУВАЧА**\n"
         f"👤 Від: {message.from_user.full_name} (ID: `{message.from_user.id}`)\n"
         f"❓ Причина: {data.get('current_reason')}\n"
-        f"📝 Деталі: {message.text}"
+        f"📝 Коментар: {message.text}"
     )
-    await bot.send_message(chat_id=ADMIN_GROUP_ID, text=report_card)
-    await message.answer("Дякуємо, скаргу прийнято. Ми перевіримо анкету порушника. ✅", reply_markup=main_menu())
+    await bot.send_message(chat_id=ADMIN_GROUP_ID, text=report_msg)
+    await message.answer("Дякуємо! Скарга надіслана на розгляд модераторам. ✅", reply_markup=main_menu())
     await state.clear()
-
-# --- ЗВ'ЯЗОК З АДМІНОМ ---
-@dp.message(F.text == "🆘 Зв'язок з адміном")
-async def contact_admin(message: Message):
-    await message.answer("Напиши своє питання наступним повідомленням. Ми отримаємо його в групі підтримки.")
 
 async def main():
     await dp.start_polling(bot)
