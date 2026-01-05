@@ -81,3 +81,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+@dp.message(Command("id"))
+async def get_group_id(message: types.Message):
+    await message.answer(f"ID цієї групи: `{message.chat.id}`")
