@@ -1,125 +1,137 @@
-import os, asyncio, logging, http.server, socketserver, threading
+import os, asyncio, logging
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
+from supabase import create_client, Client
 
-# --- ФЕЙКОВИЙ СЕРВЕР ДЛЯ RENDER (БЕЗКОШТОВНИЙ ТАРИФ) ---
-def run_dummy_server():
-    handler = http.server.SimpleHTTPRequestHandler
-    try:
-        with socketserver.TCPServer(("", 10000), handler) as httpd:
-            httpd.serve_forever()
-    except Exception: pass
+# --- НАЛАШТУВАННЯ SUPABASE ---
+SUPABASE_URL = "https://hiooettzzcdvyljympwg.supabase.co"
+SUPABASE_KEY = "Sb_publishable_k_9Wutpl9uhYS9i7PsenwA_uWgbu3_2"
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-threading.Thread(target=run_dummy_server, daemon=True).start()
-
-# --- НАЛАШТУВАННЯ ---
+# --- НАЛАШТУВАННЯ TELEGRAM ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_GROUP_ID = -1001003519981489 #
 
-logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+dp = Dispatcher()
 
-class Form(StatesGroup):
-    name, gender, search_gender, age, age_range, city, phone, photo = [State() for _ in range(8)]
+class Reg(StatesGroup):
+    name = State()
+    gender = State()
+    search_gender = State()
+    age = State()
+    age_range = State()
+    city = State()
+    phone = State()
+    photo = State()
 
-class AdminContact(StatesGroup):
-    waiting_for_message = State()
+# --- МЕНЮ ---
+def main_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="🔍 Пошук"), KeyboardButton(text="👤 Профіль")],
+        [KeyboardButton(text="💡 Ідея для бота")]
+    ], resize_keyboard=True)
 
-# --- ГОЛОВНЕ МЕНЮ ---
-def main_menu():
-    kb = [
-        [KeyboardButton(text="🔍 Пошук анкет"), KeyboardButton(text="❤️ Лайки")],
-        [KeyboardButton(text="👤 Мій профіль"), KeyboardButton(text="💡 Запропонувати ідею")]
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-
-# --- РЕЄСТРАЦІЯ ТА ВЕРИФІКАЦІЯ ---
+# --- ПОЧАТОК ---
 @dp.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext):
-    welcome_text = (
-        "Вітаємо у **Нетіндер** 🖤\n\n"
-        "Давай створимо твою анкету. Як тебе звати?"
-    )
-    await message.answer(welcome_text, reply_markup=ReplyKeyboardRemove())
-    await state.set_state(Form.name)
+async def start(message: Message, state: FSMContext):
+    await message.answer("Привіт! Створимо анкету в **Нетіндер** 🖤\n\nЯк тебе звати?", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(Reg.name)
 
-# ... (тут логіка name, gender, age_range як у попередньому коді) ...
+@dp.message(Reg.name)
+async def reg_name(message: Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    kb = [[KeyboardButton(text="Я Чоловік 👨"), KeyboardButton(text="Я Жінка 👩")]]
+    await message.answer("Твоя стать:", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
+    await state.set_state(Reg.gender)
 
-@dp.message(Form.city)
-async def process_city(message: Message, state: FSMContext):
+@dp.message(Reg.gender)
+async def reg_gender(message: Message, state: FSMContext):
+    await state.update_data(gender=message.text)
+    kb = [[KeyboardButton(text="Шукаю Чоловіків 👨"), KeyboardButton(text="Шукаю Жінок 👩")]]
+    await message.answer("Кого ти хочеш бачити в пошуку?", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
+    await state.set_state(Reg.search_gender)
+
+@dp.message(Reg.search_gender)
+async def reg_search(message: Message, state: FSMContext):
+    await state.update_data(search_gender=message.text)
+    await message.answer("Який вік тебе цікавить? (наприклад: 18-25)", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(Reg.age_range)
+
+@dp.message(Reg.age_range)
+async def reg_range(message: Message, state: FSMContext):
+    await state.update_data(age_range=message.text)
+    await message.answer("А скільки років тобі?")
+    await state.set_state(Reg.age)
+
+@dp.message(Reg.age)
+async def reg_age(message: Message, state: FSMContext):
+    await state.update_data(age=message.text)
+    await message.answer("Твоє місто?")
+    await state.set_state(Reg.city)
+
+@dp.message(Reg.city)
+async def reg_city(message: Message, state: FSMContext):
     await state.update_data(city=message.text)
-    kb = [
-        [KeyboardButton(text="Підтвердити номер ✅", request_contact=True)],
-        [KeyboardButton(text="Пропустити ➡️")]
-    ]
-    await message.answer(
-        "🛡 **Верифікація:**\n\n"
-        "Ти можеш надати номер телефону. Ми його не публікуємо, але ти отримаєш статус ✅ **Верифікований**.\n"
-        "До таких людей набагато більше довіри!",
-        reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-    )
-    await state.set_state(Form.phone)
+    kb = [[KeyboardButton(text="Надати номер ✅", request_contact=True)], [KeyboardButton(text="Пропустити ➡️")]]
+    await message.answer("🛡 **Верифікація**\n\nНадай номер через кнопку для статусу ✅.\nПрофілі без номера мають менше довіри.", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
+    await state.set_state(Reg.phone)
 
-@dp.message(Form.phone)
-@dp.message(Form.phone, F.contact)
-async def process_phone(message: Message, state: FSMContext):
-    verified = False
-    if message.contact:
-        verified = True
-        await state.update_data(phone=message.contact.phone_number, verified=True)
-    else:
-        await state.update_data(phone="Приховано", verified=False)
+@dp.message(Reg.phone)
+@dp.message(Reg.phone, F.contact)
+async def reg_phone(message: Message, state: FSMContext):
+    verified = True if message.contact else False
+    phone = message.contact.phone_number if message.contact else "Приховано"
     
-    await message.answer("Завантаж своє фото:", reply_markup=ReplyKeyboardRemove())
-    await state.set_state(Form.photo)
+    # PREMIUM НА ТИЖДЕНЬ (7 днів)
+    premium_expiry = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+    await state.update_data(phone=phone, verified=verified, premium=premium_expiry)
+    
+    await message.answer("Надішли своє фото 📸", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(Reg.photo)
 
-@dp.message(Form.photo, F.photo)
-async def process_photo(message: Message, state: FSMContext):
+@dp.message(Reg.photo, F.photo)
+async def reg_photo(message: Message, state: FSMContext):
     data = await state.get_data()
-    status = "✅ ВЕРИФІКОВАНИЙ" if data.get('verified') else "👤 НЕВЕРИФІКОВАНИЙ"
+    user_id = message.from_user.id
+    photo_id = message.photo[-1].file_id
+
+    # ЗБЕРЕЖЕННЯ В SUPABASE
+    user_record = {
+        "id": user_id,
+        "name": data['name'],
+        "age": int(data['age']),
+        "gender": data['gender'],
+        "search_gender": data['search_gender'],
+        "search_age_range": data['age_range'],
+        "city": data['city'],
+        "phone": data['phone'],
+        "is_verified": data['verified'],
+        "premium_until": data['premium'],
+        "photo_id": photo_id
+    }
     
-    # Сповіщення в адмінку
-    admin_msg = (
-        f"🆕 **НОВА АНКЕТА**\n"
-        f"👤 {data['name']}, {data['age']}р. ({status})\n"
-        f"📍 Місто: {data['city']}\n"
-        f"🔍 Шукає: {data['search_gender']} ({data['age_range']} років)\n"
-        f"🆔 ID: `{message.from_user.id}`"
-    )
-    await bot.send_photo(chat_id=ADMIN_GROUP_ID, photo=message.photo[-1].file_id, caption=admin_msg)
-    await message.answer(f"Готово! Твій статус: {status}", reply_markup=main_menu())
-    await state.clear()
+    try:
+        supabase.table("profiles").upsert(user_record).execute()
+        status = "✅ Верифікований" if data['verified'] else "👤 Неверифікований"
+        
+        # Повідомлення адміну
+        admin_info = f"🆕 **АНКЕТА В БАЗІ**\n👤 {data['name']}, {data['age']}р.\n📱 {data['phone']}\n💎 Premium до: {data['premium']}"
+        await bot.send_photo(ADMIN_GROUP_ID, photo=photo_id, caption=admin_info)
 
-# --- ЗВ'ЯЗОК З АДМІНОМ (ПРОПОЗИЦІЇ) ---
-@dp.message(F.text == "💡 Запропонувати ідею")
-async def contact_admin_start(message: Message, state: FSMContext):
-    await message.answer(
-        "Напиши свою пропозицію або ідею одним повідомленням. Адмін обов'язково її прочитає! 👇",
-        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Скасувати")]], resize_keyboard=True)
-    )
-    await state.set_state(AdminContact.waiting_for_message)
-
-@dp.message(AdminContact.waiting_for_message)
-async def forward_to_admin(message: Message, state: FSMContext):
-    if message.text == "❌ Скасувати":
-        await message.answer("Повернулися в меню.", reply_markup=main_menu())
-        await state.clear()
-        return
-
-    # Відправляємо адміну в групу
-    suggestion_msg = (
-        f"💡 **НОВА ПРОПОЗИЦІЯ**\n"
-        f"👤 Від: {message.from_user.full_name} (ID: `{message.from_user.id}`)\n"
-        f"📝 Текст: {message.text}"
-    )
-    await bot.send_message(chat_id=ADMIN_GROUP_ID, text=suggestion_msg)
+        await message.answer(
+            f"Готово! 🎉\nСтатус: {status}\n"
+            f"💎 **Premium активовано на тиждень!** (до {data['premium']})",
+            reply_markup=main_kb()
+        )
+    except Exception as e:
+        await message.answer("Помилка при збереженні. Спробуй пізніше.")
+        print(f"Помилка бази: {e}")
     
-    await message.answer("Дякуємо! Твою ідею надіслано адміну. Ви робите Нетіндер кращим! 🙌", reply_markup=main_menu())
     await state.clear()
 
 async def main():
