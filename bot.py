@@ -1,123 +1,56 @@
 import os
-import asyncio
-import logging
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
-from supabase import create_client, Client
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
+from aiogram.types import LabeledPrice, PreCheckoutQuery
+from supabase import create_client
 
-# --- НАЛАШТУВАННЯ (Supabase & Telegram) ---
-SUPABASE_URL = "https://hiooettzzcdvyljympwg.supabase.co"
-SUPABASE_KEY = "Sb_publishable_k_9Wutpl9uhYS9i7PsenwA_uWgbu3_2"
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
+# --- НАЛАШТУВАННЯ ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-ADMIN_GROUP_ID = -1001003519981489 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 bot = Bot(token=TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+dp = Dispatcher(bot)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-class Reg(StatesGroup):
-    name, gender, search_gender, age, city, phone, photo = [State() for _ in range(7)]
+# Ціна в зірках (наприклад, 100 зірок)
+PREMIUM_STARS_PRICE = 100
 
-def main_kb():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="🔍 Пошук"), KeyboardButton(text="👤 Профіль")],
-        [KeyboardButton(text="💡 Ідея для бота")]
-    ], resize_keyboard=True)
-
-# --- ЛОГІКА РЕЄСТРАЦІЇ ---
-
-@dp.message(Command("start"))
-async def start(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Вітаємо у **Нетіндер** 🖤\n\nДавай створимо анкету. Як тебе звати?", reply_markup=ReplyKeyboardRemove())
-    await state.set_state(Reg.name)
-
-@dp.message(Reg.name)
-async def reg_name(message: Message, state: FSMContext):
-    await state.update_data(name=message.text)
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Я Чоловік 👨"), KeyboardButton(text="Я Жінка 👩")]], resize_keyboard=True)
-    await message.answer("Твоя стать:", reply_markup=kb)
-    await state.set_state(Reg.gender)
-
-@dp.message(Reg.gender)
-async def reg_gender(message: Message, state: FSMContext):
-    await state.update_data(gender=message.text)
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Шукаю Чоловіків 👨"), KeyboardButton(text="Шукаю Жінок 👩")]], resize_keyboard=True)
-    await message.answer("Кого шукаємо?", reply_markup=kb)
-    await state.set_state(Reg.search_gender)
-
-@dp.message(Reg.search_gender)
-async def reg_search(message: Message, state: FSMContext):
-    await state.update_data(search_gender=message.text)
-    await message.answer("Скільки тобі років?", reply_markup=ReplyKeyboardRemove())
-    await state.set_state(Reg.age)
-
-@dp.message(Reg.age)
-async def reg_age(message: Message, state: FSMContext):
-    await state.update_data(age=message.text)
-    await message.answer("З якого ти міста?")
-    await state.set_state(Reg.city)
-
-@dp.message(Reg.city)
-async def reg_city(message: Message, state: FSMContext):
-    await state.update_data(city=message.text)
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="Надати номер ✅", request_contact=True)],
-        [KeyboardButton(text="Пропустити ➡️")]
-    ], resize_keyboard=True)
-    await message.answer("🛡 **Верифікація**\nНадай номер для статусу ✅", reply_markup=kb)
-    await state.set_state(Reg.phone)
-
-@dp.message(Reg.phone)
-@dp.message(Reg.phone, F.contact)
-async def reg_phone(message: Message, state: FSMContext):
-    verified = True if message.contact else False
-    phone = message.contact.phone_number if message.contact else "Приховано"
-    # РАХУЄМО ПРЕМІУМ НА 7 ДНІВ
-    premium_expiry = (datetime.now() + timedelta(days=7)).strftime("%d.%m.%Y")
-    await state.update_data(phone=phone, verified=verified, premium=premium_expiry)
-    await message.answer("Надішли фото 📸", reply_markup=ReplyKeyboardRemove())
-    await state.set_state(Reg.photo)
-
-@dp.message(Reg.photo, F.photo)
-async def reg_photo(message: Message, state: FSMContext):
-    data = await state.get_data()
-    photo_id = message.photo[-1].file_id
+@dp.message_handler(commands=['start'])
+async def start(message: types.Message):
+    user_id = message.from_id
+    premium_date = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
     
-    # ЗБЕРЕЖЕННЯ В SUPABASE
-    try:
-        user_record = {
-            "id": message.from_user.id,
-            "name": data['name'],
-            "age": data['age'],
-            "gender": data['gender'],
-            "search_gender": data['search_gender'],
-            "city": data['city'],
-            "phone": data['phone'],
-            "is_verified": data['verified'],
-            "premium_until": data['premium'],
-            "photo_id": photo_id
-        }
-        supabase.table("profiles").upsert(user_record).execute()
-        
-        status = "✅ Верифікований" if data['verified'] else "👤 Неверифікований"
-        admin_card = f"🆕 **АНКЕТА**\n👤 {data['name']}, {data['age']}р.\n📱 {data['phone']}\n💎 Premium до: {data['premium']}"
-        await bot.send_photo(ADMIN_GROUP_ID, photo=photo_id, caption=admin_card)
+    # Реєстрація (upsert оновить, якщо вже є)
+    data = {"id": user_id, "name": message.from_user.first_name, "premium_until": premium_date}
+    supabase.table("profiles").upsert(data).execute()
+    
+    await message.answer(f"🚀 Тобі активовано 7 днів Premium до {premium_date}!")
 
-        await message.answer(f"Готово! 🎉\nСтатус: {status}\n💎 Premium активовано до {data['premium']}", reply_markup=main_kb())
-    except Exception as e:
-        await message.answer("Анкету створено (база в процесі налаштування).", reply_markup=main_kb())
-    await state.clear()
+@dp.message_handler(lambda message: message.text == "💳 Купити Premium")
+async def pay_stars(message: types.Message):
+    await bot.send_invoice(
+        message.chat.id,
+        title="Premium доступ на 30 днів",
+        description="Повний доступ до пошуку анкет",
+        provider_token="", # Для Stars залишаємо порожнім
+        currency="XTR",    # Код валюти для Telegram Stars
+        prices=[LabeledPrice(label="Premium", amount=PREMIUM_STARS_PRICE)],
+        payload="premium_30_days"
+    )
 
-async def main():
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+@dp.pre_checkout_query_handler(lambda query: True)
+async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery):
+    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+@dp.message_handler(content_types=types.ContentType.SUCCESSFUL_PAYMENT)
+async def success_payment(message: types.Message):
+    # Додаємо 30 днів до поточної дати
+    new_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+    supabase.table("profiles").update({"premium_until": new_date}).eq("id", message.from_id).execute()
+    
+    await message.answer(f"✅ Оплата успішна! Твій Premium подовжено до {new_date}")
+
+if __name__ == '__main__':
+    executor.start_polling(dp, skip_updates=True)
