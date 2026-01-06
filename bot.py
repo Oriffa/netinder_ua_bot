@@ -1,4 +1,24 @@
 import os
+from aiohttp import web
+import asyncio
+
+# Функція-заглушка для Render
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def start_webhook():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 10000)))
+    await site.start()
+
+# У вашій основній функції main() додайте:
+# loop = asyncio.get_event_loop()
+# loop.create_task(start_webhook())
+
+import os
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
