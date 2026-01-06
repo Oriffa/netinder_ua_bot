@@ -1,89 +1,65 @@
 import os
-from aiohttp import web
 import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.types import LabeledPrice, PreCheckoutQuery
+from supabase import create_client, Client
+from aiohttp import web
 
-# Функція-заглушка для Render
+# --- НАЛАШТУВАННЯ WEB-СЕРВЕРА ДЛЯ RENDER ---
 async def handle(request):
     return web.Response(text="Bot is running!")
 
-async def start_webhook():
+async def start_web_server():
     app = web.Application()
-    app.router.add_get('/', handle)
+    app.router.add_get("/", handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 10000)))
+    # Render передає порт у змінну оточення PORT
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
+    print(f"Web server started on port {port}")
 
-# У вашій основній функції main() додайте:
-# loop = asyncio.get_event_loop()
-# loop.create_task(start_webhook())
-
-import os
-from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
-from supabase import create_client
-
-# --- НАЛАШТУВАННЯ ---
+# --- НАЛАШТУВАННЯ БОТА ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+dp = Dispatcher()
 
-# Ціна в зірках (наприклад, 100 зірок)
-PREMIUM_PRICE = 100
-
-@dp.message_handler(commands=['start'])
-async def start_command(message: types.Message):
+@dp.message(Command("start"))
+async def start_handler(message: types.Message):
     await message.answer(
-        f"Привіт! Оформіть доступ за {PREMIUM_PRICE} зірок ⭐️",
-        reply_markup=payment_keyboard()
+        "Привіт! Оплатіть доступ до преміум-функцій (10 зірок):",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="Оплатити 10 ⭐", pay=True)
+        ]])
     )
 
-def payment_keyboard():
-    keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(types.InlineKeyboardButton(
-        text=f"Оплатити {PREMIUM_PRICE} зірок", 
-        pay=True)
-    )
-    return keyboard
+@dp.shipping_query()
+async def shipping_handler(query: types.ShippingQuery):
+    await bot.answer_shipping_query(query.id, ok=True)
 
-@dp.message_handler(commands=['pay'])
-async def send_invoice(message: types.Message):
-    await bot.send_invoice(
-        message.chat.id,
-        title="Преміум доступ",
-        description="Повний доступ на 30 днів",
-        provider_token="", # Для зірок залишаємо порожнім
-        currency="XTR",
-        prices=[types.LabeledPrice(label="Преміум", amount=PREMIUM_PRICE)],
-        payload="premium_subscription"
-    )
+@dp.pre_checkout_query()
+async def checkout_handler(checkout_query: PreCheckoutQuery):
+    await bot.answer_pre_checkout_query(checkout_query.id, ok=True)
 
-@dp.pre_checkout_query_handler(lambda query: True)
-async def process_pre_checkout_query(pre_checkout_query: types.PreCheckoutQuery):
-    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
-
-@dp.message_handler(content_types=types.ContentTypes.SUCCESSFUL_PAYMENT)
-async def successful_payment(message: types.Message):
-    # Додаємо 30 днів до поточної дати
-    new_date = (datetime.now() + timedelta(days=30)).isoformat()
+@dp.message(lambda message: message.successful_payment is not None)
+async def got_payment(message: types.Message):
     user_id = str(message.from_user.id)
+    # Записуємо в Supabase
+    supabase.table("profiles").upsert({"id": user_id, "premium_data": "active"}).execute()
+    await message.answer("Дякуємо! Ваш преміум-доступ активовано.")
 
-    # Записуємо в Supabase (Таблиця "profiles")
-    try:
-        supabase.table("profiles").upsert({
-            "id": user_id,
-            "premium_data": new_date
-        }).execute()
-        
-        await message.answer("Оплата успішна! Ваш доступ оновлено на 30 днів.")
-    except Exception as e:
-        await message.answer("Оплата пройшла, але виникла помилка в базі даних. Зв'яжіться з адміном.")
-        print(f"Error: {e}")
+async def main():
+    # Запускаємо веб-сервер паралельно з ботом
+    asyncio.create_task(start_web_server())
+    # Запускаємо бота
+    print("Bot is starting polling...")
+    await dp.start_polling(bot)
 
-if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+if __name__ == "__main__":
+    asyncio.run(main())
